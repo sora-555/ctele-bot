@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.env
+Database.db
+Database.db-wal
+Database.db-shm
+logs/
+*.log
+.idea/
+.vscode/
+.DS_Store
+bot.zip
