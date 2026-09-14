@@ -1,168 +1,122 @@
-"""Post detail cards, the paginated gallery, and the favorite toggle."""
-
-from __future__ import annotations
-
-import logging
+from html import escape
 
 from aiogram import F, Router
-from aiogram.filters import Command
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InputMediaPhoto, Message
 
-from bot.database import repository as repo
-from bot.database.base import session_scope
-from bot.handlers.common import (
-    open_gallery,
-    open_post_card,
-    render_gallery_page,
-    safe_edit_markup,
-)
-from bot.keyboards import inline
-from bot.loader import services
-from bot.texts import ui
+from bot.database.repository.content import toggle_favorite
+from bot.keyboards.inline import gallery_kb
+from bot.services.sessions import store
+from bot.states.user import InputFlow
+from bot.texts.ui import gallery_caption
 
-log = logging.getLogger(__name__)
-router = Router(name="posts")
-
-
-async def _last_viewed(session, user_id: int):
-    rows, _ = await repo.list_history(session, user_id, page=1, per_page=1)
-    return rows[0] if rows else None
-
-
-@router.message(Command("post"))
-async def cmd_post(message: Message, user) -> None:
-    parts = (message.text or "").split(maxsplit=1)
-    if len(parts) < 2 or not parts[1].strip():
-        await message.answer(
-            f"{ui.PENDING} 𝗣𝗼𝘀𝘁\n\n{ui.SEPARATOR}\n\n"
-            f"{ui.ITEM} Usage {ui.KV} /post <link>\n"
-            f"{ui.ITEM} Tip {ui.KV} search results open galleries directly\n",
-            reply_markup=inline.back_to_menu(),
-        )
-        return
-    await open_post_card(message.bot, message.chat.id, user_id=user.id, post_url=parts[1].strip())
-
-
-@router.message(Command("last"))
-async def cmd_last(message: Message, user, session) -> None:
-    row = await _last_viewed(session, user.id)
-    if row is None:
-        await message.answer(ui.no_history(), reply_markup=inline.back_to_menu())
-        return
-    await open_post_card(message.bot, message.chat.id, user_id=user.id, post_url=row.post_url)
-
-
-@router.message(Command("gallery"))
-async def cmd_gallery(message: Message, user, session) -> None:
-    row = await _last_viewed(session, user.id)
-    if row is None:
-        await message.answer(ui.no_history(), reply_markup=inline.back_to_menu())
-        return
-    await open_gallery(message.bot, message.chat.id, user_id=user.id, post_url=row.post_url)
-
-
-@router.callback_query(F.data.startswith("pv:"))
-async def cb_post_to_gallery(callback: CallbackQuery, user) -> None:
-    _, sid, raw_page = callback.data.split(":")
-    payload = services().sessions.get(sid, user_id=user.id)
-    if payload is None:
-        await callback.answer("Expired", show_alert=True)
-        return
-    await callback.answer()
-    await open_gallery(
-        callback.bot,
-        callback.message.chat.id,
-        user_id=user.id,
-        post_url=payload["post_url"],
-        page=max(int(raw_page), 1),
-        clear_ids=list(payload.get("message_ids") or []),
-        edit_id=callback.message.message_id,
-        edit_is_photo=bool(payload.get("is_photo")),
-    )
+router = Router()
 
 
 @router.callback_query(F.data.startswith("g:"))
-async def cb_gallery_page(callback: CallbackQuery, user) -> None:
-    try:
-        _, sid, raw_page = callback.data.split(":")
-        page = int(raw_page)
-    except ValueError:
-        await callback.answer()
+async def gallery(call: CallbackQuery, ctele, db, state):
+    _, sid, action = call.data.split(":")
+    data = store.get(sid, call.from_user.id)
+    if not data or "post" not in data:
+        return await call.answer("This session expired.", show_alert=True)
+
+    post = data["post"]
+    number = data.get("image", 1)
+    total = len(post.images)
+    if not total:
+        return await call.answer("This post has no viewable images.", show_alert=True)
+
+    if action == "prev":
+        number -= 1
+    elif action == "next":
+        number += 1
+    elif action == "first":
+        number = 1
+    elif action == "last":
+        number = total
+    elif action == "minus5":
+        number -= 5
+    elif action == "plus5":
+        number += 5
+    elif action == "jump":
+        await call.answer()
+        await call.message.edit_caption(
+            caption=(
+                f"❖ <b>Jump to an image</b>\n\nSend a number from 1 to {total}.\n"
+                f"Current image: {number}\n\n/cancel"
+            ),
+            reply_markup=gallery_kb(sid, number, total),
+        )
+        await state.set_state(InputFlow.jump_image)
+        await state.update_data(sid=sid)
         return
-
-    svc = services()
-    payload = svc.sessions.get(sid, user_id=user.id)
-    if payload is None:
-        await callback.answer()
-        await callback.message.answer(ui.session_expired(), reply_markup=inline.session_expired())
-        return
-
-    svc.sessions.update(sid, page=max(page, 1))
-    await callback.answer()
-    await render_gallery_page(
-        callback.bot,
-        callback.message.chat.id,
-        sid=sid,
-        user_id=user.id,
-        edit_in_place=True,
-    )
-
-
-@router.callback_query(F.data.startswith("gd:"))
-async def cb_gallery_details(callback: CallbackQuery, user) -> None:
-    _, sid = callback.data.split(":", 1)
-    payload = services().sessions.get(sid, user_id=user.id)
-    if payload is None:
-        await callback.answer("Expired", show_alert=True)
-        return
-    await callback.answer()
-    await open_post_card(
-        callback.bot,
-        callback.message.chat.id,
-        user_id=user.id,
-        post_url=payload["post_url"],
-        clear_ids=list(payload.get("message_ids") or []),
-        edit_id=callback.message.message_id,
-        edit_is_photo=True,
-        back_label=f"{ui.LEFT} Gallery",
-        back_data=f"g:{sid}:{payload.get('page', 1)}",
-    )
-
-
-@router.callback_query(F.data.startswith("fv:"))
-async def cb_toggle_favorite(callback: CallbackQuery, user, session) -> None:
-    _, sid = callback.data.split(":", 1)
-    svc = services()
-    payload = svc.sessions.get(sid, user_id=user.id)
-    if payload is None:
-        await callback.answer("Expired", show_alert=True)
-        return
-
-    post_url = payload["post_url"]
-    async with session_scope() as db:
-        saved = await repo.toggle_favorite(
+    elif action == "save":
+        saved = await toggle_favorite(
             db,
-            user_id=user.id,
-            post_url=post_url,
-            title=payload.get("title") or post_url,
-            thumbnail=(payload.get("images") or [None])[0],
+            call.from_user.id,
+            post.url,
+            post.title,
+            post.images[0] if post.images else None,
+        )
+        return await call.answer("Saved." if saved else "Removed from favorites.")
+    elif action == "info":
+        await call.answer()
+        genres = ", ".join(escape(item) for item in post.genres) or "—"
+        published = post.upload_date.strftime("%Y-%m-%d") if post.upload_date else "—"
+        return await call.message.edit_caption(
+            caption=(
+                "❖ <b>Post information</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"<b>{escape(post.title)}</b>\n\n"
+                f"▸ Images: {total}\n▸ Category: {genres}\n▸ Published: {published}"
+            ),
+            reply_markup=gallery_kb(sid, number, total),
+        )
+    elif action == "back":
+        from bot.handlers.browse import render_result
+
+        await call.answer()
+        return await render_result(call.message, data["query"], data, sid, data["index"])
+
+    number = max(1, min(total, number))
+    data["image"] = number
+    await call.answer()
+    async with store.lock(sid):
+        await call.message.edit_media(
+            InputMediaPhoto(
+                media=post.images[number - 1],
+                caption=gallery_caption(post, number),
+                parse_mode="HTML",
+            ),
+            reply_markup=gallery_kb(sid, number, total),
         )
 
-    await callback.answer(f"{ui.SUCCESS} Saved" if saved else f"{ui.PENDING} Removed")
 
-    message_ids = list(payload.get("message_ids") or [])
-    if not message_ids:
-        return
+@router.message(InputFlow.jump_image)
+async def jump_image(message: Message, state):
+    state_data = await state.get_data()
+    sid = state_data.get("sid")
+    data = store.get(sid, message.from_user.id) if sid else None
+    try:
+        number = int((message.text or "").strip())
+        assert data and data.get("post") and 1 <= number <= len(data["post"].images)
+    except (ValueError, AssertionError):
+        return await message.answer("Enter a valid image number, or /cancel.")
 
-    if payload.get("kind") == "post":
-        markup = inline.post_card(
-            sid, is_favorite=saved, post_url=post_url, back_label="Back", back_data="cmd:menu"
+    data["image"] = number
+    await state.clear()
+    post = data["post"]
+    try:
+        await message.bot.edit_message_media(
+            chat_id=data["chat_id"],
+            message_id=data["message_id"],
+            media=InputMediaPhoto(
+                media=post.images[number - 1],
+                caption=gallery_caption(post, number),
+                parse_mode="HTML",
+            ),
+            reply_markup=gallery_kb(sid, number, len(post.images)),
         )
-    else:
-        from bot.services.pagination import known
-
-        images = payload.get("images") or []
-        per_page = max(2, min(10, payload.get("per_page") or svc.settings.images_per_page))
-        info = known(len(images), per_page, payload.get("page", 1))
-        markup = inline.gallery(sid, info, is_favorite=saved, post_url=post_url)
-    await safe_edit_markup(callback.bot, callback.message.chat.id, message_ids[0], markup)
+    finally:
+        try:
+            await message.delete()
+        except Exception:
+            pass
