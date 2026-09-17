@@ -1,66 +1,130 @@
-from aiogram import Router
+import logging
+
+from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import Message
-from sqlalchemy import func, select
+from aiogram.types import CallbackQuery, Message
 
-from bot.database.models import Favorite, History, User
-from bot.keyboards.inline import main_kb
+from bot.config import settings
+from bot.database.models import UserSetting
+from bot.database.repository import content as content_repo
+from bot.database.repository import users as users_repo
+from bot.handlers import viewer
+from bot.keyboards.inline import main_kb, settings_kb
+from bot.texts import ui
 
+log = logging.getLogger(__name__)
 router = Router()
 
+PER_PAGE_CHOICES = (3, 5, 6, 10)
+TTL_CHOICES = (None, 15, 30, 60, 0)
 
-@router.message(Command("profile"))
-async def profile(message: Message, db):
-    user = await db.get(User, message.from_user.id)
-    if not user:
-        return await message.answer("Profile is not available yet. Use /start first.")
-    saves = await db.scalar(select(func.count()).select_from(Favorite).where(Favorite.user_id == user.id))
+
+async def setting_for(db, user_id: int) -> UserSetting:
+    setting = await db.get(UserSetting, user_id)
+    if setting is None:
+        setting = UserSetting(user_id=user_id)
+        db.add(setting)
+        await db.flush()
+    return setting
+
+
+def ttl_label(value) -> str:
+    if value is None:
+        return f"{settings.auto_delete_ttl_minutes} min (default)"
+    return 'off' if value == 0 else f"{value} min"
+
+
+def settings_payload(setting: UserSetting):
+    auto_delete = bool(settings.auto_delete_enabled) and setting.auto_delete_minutes != 0
+    label = ttl_label(setting.auto_delete_minutes)
+    return ui.settings_text(setting, label, auto_delete), settings_kb(setting, label, auto_delete)
+
+
+async def open_saved(message, db, user, tab: str = 'posts'):
+    posts = await content_repo.count_favorites(db, user.id)
+    images = await content_repo.count_saved_images(db, user.id)
+    if tab == 'posts' and not posts and images:
+        tab = 'images'
+    elif tab == 'images' and not images and posts:
+        tab = 'posts'
+    mode = 'saved_images' if tab == 'images' else 'saved_posts'
+    title = 'Saved images' if tab == 'images' else 'Saved posts'
+    data = viewer.entry_data(mode, title, tab=tab)
+    data['count_posts'] = posts
+    data['count_images'] = images
+    return await viewer.start_card(message, 'f', data, 1, db=db)
+
+
+async def open_history(message, db, user):
+    data = viewer.entry_data('history', 'History')
+    return await viewer.start_card(message, 'f', data, 1, db=db)
+
+
+@router.message(Command('profile'))
+async def profile_command(message: Message, db, user):
+    stats = await users_repo.user_stats(db, user.id)
     await message.answer(
-        "❖ <b>Your profile</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"ID: <code>{user.id}</code>\n"
-        f"Requests: {user.request_count}\n"
-        f"Saved posts: {saves or 0}\n"
-        f"Status: {'active' if user.is_active else 'blocked'}"
+        ui.profile_text(user, stats['favorites'], stats['saved_images'], stats['history']),
+        reply_markup=main_kb(),
     )
 
 
-@router.message(Command("favorites"))
-async def favorites(message: Message, db):
-    rows = (await db.scalars(
-        select(Favorite).where(Favorite.user_id == message.from_user.id).order_by(Favorite.created_at.desc())
-    )).all()
-    if not rows:
-        return await message.answer("You have no saved posts yet.", reply_markup=main_kb())
-    text = "❖ <b>Saved posts</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    text += "\n".join(f"• <a href=\"{row.post_url}\">{row.post_title}</a>" for row in rows[:20])
-    await message.answer(text)
+@router.message(Command('favorites'))
+async def favorites_command(message: Message, db, user):
+    await open_saved(message, db, user)
 
 
-@router.message(Command("history"))
-async def history(message: Message, db):
-    rows = (await db.scalars(
-        select(History).where(History.user_id == message.from_user.id).order_by(History.viewed_at.desc())
-    )).all()
-    if not rows:
-        return await message.answer("Your viewing history is empty.", reply_markup=main_kb())
-    text = "❖ <b>Recently viewed</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    text += "\n".join(f"• <a href=\"{row.post_url}\">{row.post_title}</a>" for row in rows[:20])
-    await message.answer(text)
+@router.callback_query(F.data == 'menu:saved')
+async def menu_saved(call: CallbackQuery, db, user):
+    await call.answer()
+    await open_saved(call.message, db, user)
 
 
-@router.message(Command("settings"))
-async def settings_(message: Message):
-    await message.answer(
-        "❖ <b>Settings</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Single-image mode is active. Album mode remains an extension point."
-    )
+@router.message(Command('history'))
+async def history_command(message: Message, db, user):
+    await open_history(message, db, user)
 
 
-@router.message(Command("about"))
-async def about(message: Message):
-    await message.answer(
-        "❖ <b>About CosplayTele</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
-        "A Telegram browser for CosplayTele galleries.\n"
-        "Search and gallery controls stay on one evolving screen."
-    )
+@router.callback_query(F.data == 'menu:history')
+async def menu_history(call: CallbackQuery, db, user):
+    await call.answer()
+    await open_history(call.message, db, user)
+
+
+@router.message(Command('settings'))
+async def settings_command(message: Message, db, user):
+    setting = await setting_for(db, user.id)
+    text, keyboard = settings_payload(setting)
+    await message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(F.data == 'menu:settings')
+async def menu_settings(call: CallbackQuery, db, user):
+    await call.answer()
+    setting = await setting_for(db, user.id)
+    text, keyboard = settings_payload(setting)
+    await viewer.swap_screen(call.message, text, keyboard)
+
+
+@router.callback_query(F.data.startswith('set:'))
+async def settings_toggle(call: CallbackQuery, db, user):
+    key = call.data.split(':')[1] if ':' in call.data else ''
+    setting = await setting_for(db, user.id)
+    if key == 'delivery':
+        setting.delivery_mode = 'single' if setting.delivery_mode == 'album' else 'album'
+    elif key == 'perpage':
+        current = setting.images_per_page if setting.images_per_page in PER_PAGE_CHOICES else PER_PAGE_CHOICES[0]
+        setting.images_per_page = PER_PAGE_CHOICES[(PER_PAGE_CHOICES.index(current) + 1) % len(PER_PAGE_CHOICES)]
+    elif key == 'thumbs':
+        setting.show_thumbnails = not setting.show_thumbnails
+    elif key == 'numbers':
+        setting.numbered_nav = not setting.numbered_nav
+    elif key == 'ttl':
+        current = setting.auto_delete_minutes if setting.auto_delete_minutes in TTL_CHOICES else None
+        setting.auto_delete_minutes = TTL_CHOICES[(TTL_CHOICES.index(current) + 1) % len(TTL_CHOICES)]
+    else:
+        return await call.answer('Unknown setting.', show_alert=True)
+    await db.flush()
+    await call.answer('Saved.')
+    text, keyboard = settings_payload(setting)
+    await viewer.swap_screen(call.message, text, keyboard)

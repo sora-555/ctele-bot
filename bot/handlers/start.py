@@ -1,50 +1,92 @@
-from aiogram import F, Router
-from aiogram.filters import Command
-from aiogram.types import CallbackQuery, Message
-from bot.keyboards.inline import main_kb
-from bot.states.user import InputFlow
+import logging
 
+from aiogram import F, Router
+from aiogram.filters import Command, CommandObject
+from aiogram.types import CallbackQuery, Message
+
+from bot.config import settings
+from bot.database.repository import content as content_repo
+from bot.handlers import viewer
+from bot.texts import ui
+
+log = logging.getLogger(__name__)
 router = Router()
 
 
-async def edit_menu_message(message, text):
-	if message.photo:
-		return await message.edit_caption(caption=text, reply_markup=main_kb())
-	return await message.edit_text(text, reply_markup=main_kb())
+async def main_menu_payload(db, user):
+    return await viewer.main_menu_screen(db, user)
 
 
-@router.message(Command('start','menu'))
-async def start(message:Message): await message.answer('❖ <b>CosplayTele</b>\n━━━━━━━━━━━━━━━━━━━━\n\nBrowse cosplay galleries with one evolving screen.',reply_markup=main_kb())
-@router.callback_query(F.data=='menu:main')
-async def main_menu(call:CallbackQuery):
- await call.answer()
- await edit_menu_message(call.message, '❖ <b>Main menu</b>')
+async def send_main_menu(message, db, user):
+    text, keyboard = await main_menu_payload(db, user)
+    await message.answer(text, reply_markup=keyboard)
 
 
-@router.callback_query(F.data == 'menu:search')
-async def search_menu(call:CallbackQuery, state):
- await call.answer()
- await state.set_state(InputFlow.search)
- message = '❖ <b>Search</b>\n━━━━━━━━━━━━━━━━━━━━\n\nSend a name, character, or keyword.'
- await edit_menu_message(call.message, message)
+@router.message(Command('start'))
+async def start(message: Message, command: CommandObject, db, user, ctele):
+    payload = (command.args or '').strip()
+    if payload.startswith('post-'):
+        slug = payload[5:].strip()
+        url = slug if slug.startswith('http') else f"{settings.source_base_url.rstrip('/')}/{slug.lstrip('/')}"
+        sid = await viewer.start_gallery(message, url, ctele, db, title='Shared gallery')
+        if sid:
+            return
+        await message.answer(ui.notice('Not available', 'That gallery could not be opened. Try a search instead.'))
+    await send_main_menu(message, db, user)
 
 
-@router.callback_query(F.data == 'menu:categories')
-async def categories_menu(call:CallbackQuery, ctele):
- await call.answer()
- rows = await ctele.categories()
- if not rows:
-  text = 'No categories are available right now.'
- else:
-  lines = ['❖ <b>Categories</b>', '━━━━━━━━━━━━━━━━━━━━', '']
-  lines.extend(f'• {item.name}' for item in rows[:50])
-  text = '\n'.join(lines)
- await edit_menu_message(call.message, text)
+@router.message(Command('menu'))
+async def menu(message: Message, db, user):
+    await send_main_menu(message, db, user)
 
 
 @router.message(Command('help'))
-async def help_(message:Message): await message.answer('Available: /start /menu /latest /search /categories /favorites /history /profile /settings /cancel')
+async def help_command(message: Message):
+    await message.answer(ui.help_text())
+
+
+@router.message(Command('about'))
+async def about(message: Message):
+    await message.answer(ui.about_text(settings.source_base_url))
+
+
 @router.message(Command('cancel'))
-async def cancel(message:Message, state):
- await state.clear()
- await message.answer('Input cancelled. Use /menu to continue.',reply_markup=main_kb())
+async def cancel(message: Message, state, db, user):
+    await state.clear()
+    await message.answer('Input cancelled.', reply_markup=None)
+    await send_main_menu(message, db, user)
+
+
+async def edit_to_main(call: CallbackQuery, db, user):
+    text, keyboard = await main_menu_payload(db, user)
+    await viewer.swap_screen(call.message, text, keyboard)
+
+
+@router.callback_query(F.data == 'menu:main')
+async def menu_main(call: CallbackQuery, db, user, state):
+    await state.clear()
+    await call.answer()
+    await edit_to_main(call, db, user)
+
+
+@router.callback_query(F.data == 'menu:help')
+async def menu_help(call: CallbackQuery):
+    await call.answer()
+    await viewer.swap_screen(call.message, ui.help_text(), None)
+
+
+@router.callback_query(F.data == 'menu:about')
+async def menu_about(call: CallbackQuery):
+    await call.answer()
+    await viewer.swap_screen(call.message, ui.about_text(settings.source_base_url), None)
+
+
+@router.callback_query(F.data == 'menu:continue')
+async def menu_continue(call: CallbackQuery, db, user, ctele):
+    rows, _ = await content_repo.list_history(db, user.id, 1, 0)
+    if not rows:
+        return await call.answer('Nothing to continue yet.', show_alert=True)
+    await call.answer()
+    sid = await viewer.start_gallery(call.message, rows[0].post_url, ctele, db, title='Continue')
+    if not sid:
+        await call.message.answer(ui.notice('Not available', 'That gallery could not be opened.'))

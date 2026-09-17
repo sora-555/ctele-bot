@@ -1,238 +1,148 @@
+import logging
+
 from aiogram import F, Router
-from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InputMediaPhoto, Message
+from aiogram.filters import Command, CommandObject
+from aiogram.types import CallbackQuery, Message
 
-from bot.keyboards.inline import gallery_kb, search_kb
-from bot.services.sessions import store
+from bot.database.repository import stats as stats_repo
+from bot.handlers import viewer
 from bot.states.user import InputFlow
-from bot.texts.ui import gallery_caption, result_card
+from bot.texts import symbols as S
+from bot.texts import ui
 
+log = logging.getLogger(__name__)
 router = Router()
 
+SOURCE_ERROR = ui.notice('Search unavailable', 'The source did not respond. Try again in a moment.')
 
-async def render_result(message, query, data, sid, index=1):
-    item = data["items"][index - 1]
-    data["index"] = index
-    store.update(sid, data)
-    text = result_card(query, item, index, data.get("page", 1))
-    keyboard = search_kb(sid, index, index > 1, data.get("has_next", True))
-    if item.thumbnail:
-        try:
-            await message.edit_media(
-                InputMediaPhoto(media=item.thumbnail, caption=text, parse_mode="HTML"),
-                reply_markup=keyboard,
-            )
-            return
-        except Exception:
-            pass
+
+async def run_search(message: Message, query: str, ctele, db, user):
     try:
-        await message.edit_text(text, reply_markup=keyboard)
+        page = await ctele.search(query, 1)
     except Exception:
-        await message.edit_caption(caption=text, reply_markup=keyboard)
-
-
-async def render_result_from_state(message, data, sid, index):
-    data["index"] = index
-    store.update(sid, data)
-    item = data["items"][index - 1]
-    try:
-        if data.get("media") and item.thumbnail:
-            await message.bot.edit_message_media(
-                chat_id=data["chat_id"],
-                message_id=data["message_id"],
-                media=InputMediaPhoto(
-                    media=item.thumbnail,
-                    caption=result_card(data["query"], item, index, data.get("page", 1)),
-                    parse_mode="HTML",
-                ),
-                reply_markup=search_kb(sid, index, index > 1, data.get("has_next", True)),
-            )
-        else:
-            await message.bot.edit_message_text(
-                chat_id=data["chat_id"],
-                message_id=data["message_id"],
-                text=result_card(data["query"], item, index, data.get("page", 1)),
-                reply_markup=search_kb(sid, index, index > 1, data.get("has_next", True)),
-            )
-    finally:
-        try:
-            await message.delete()
-        except Exception:
-            pass
-
-
-async def show_listing(message: Message, page, label: str):
+        log.exception('search failed for %s', query)
+        return await message.answer(SOURCE_ERROR)
     if not page.items:
-        return await message.answer(f"No {label.lower()} posts found.")
-    data = {
-        "query": label,
-        "items": page.items,
-        "page": page.page,
-        "index": 1,
-        "has_next": page.has_next,
-    }
-    sid = store.create(message.from_user.id, data)
-    item = page.items[0]
-    keyboard = search_kb(sid, 1, False, page.has_next)
-    if item.thumbnail:
-        sent = await message.answer_photo(
-            item.thumbnail,
-            caption=result_card(label, item, 1, page.page),
-            parse_mode="HTML",
-            reply_markup=keyboard,
-        )
-    else:
-        sent = await message.answer(result_card(label, item, 1, page.page), reply_markup=keyboard)
-    data["chat_id"], data["message_id"], data["media"] = (
-        sent.chat.id,
-        sent.message_id,
-        bool(item.thumbnail),
+        return await message.answer(ui.notice('No results', f'Nothing matched {ui.safe(query)}. Try another keyword.'))
+    await stats_repo.log_search(db, user.id, query)
+    data = viewer.entry_data(
+        'search',
+        f'Search {S.DOT} {query}',
+        items=viewer.summary_items(page, 'Search result'),
+        page=1,
+        has_next=page.has_next,
+        query=query,
+        source='search',
     )
-    store.update(sid, data)
+    await viewer.start_card(message, 's', data, 1, ctele=ctele, db=db)
 
 
-async def run_search(message: Message, query: str, ctele, state):
-    query = query.strip()
+async def run_listing(message: Message, title: str, page, source: str, ctele, db, query=None):
+    data = viewer.entry_data(
+        'listing',
+        title,
+        items=viewer.summary_items(page, title),
+        page=1,
+        has_next=page.has_next,
+        source=source,
+        query=query,
+    )
+    await viewer.start_card(message, 's', data, 1, ctele=ctele, db=db)
+
+
+async def open_source(message: Message, kind: str, ctele, db, user):
+    try:
+        if kind == 'latest':
+            page = await ctele.latest(1)
+        else:
+            page = await ctele.popular(0)
+    except Exception:
+        log.exception('%s failed', kind)
+        return await message.answer(SOURCE_ERROR)
+    if not page.items:
+        return await message.answer(ui.notice('Nothing to show', 'The source returned no posts right now.'))
+    title = 'Latest' if kind == 'latest' else 'Popular'
+    await run_listing(message, title, page, kind, ctele, db)
+
+
+async def open_random(message: Message, ctele, db, user):
+    try:
+        item = await ctele.random_post()
+    except Exception:
+        log.exception('random failed')
+        return await message.answer(SOURCE_ERROR)
+    if item is None:
+        return await message.answer(ui.notice('Nothing to show', 'The source returned no posts right now.'))
+    sid = await viewer.start_gallery(message, item.url, ctele, db, title='Random pick')
+    if not sid:
+        await message.answer(ui.notice('Not available', 'That post has no viewable images.'))
+
+
+@router.message(Command('search'))
+async def search_command(message: Message, command: CommandObject, ctele, db, user, state):
+    query = (command.args or '').strip()
     if not query:
         await state.set_state(InputFlow.search)
-        return await message.answer("Send a name, character, or keyword.")
-    page = await ctele.search(query, 1)
-    if not page.items:
-        return await message.answer("No results. Try another search.")
-    data = {
-        "query": query,
-        "items": page.items,
-        "page": page.page,
-        "index": 1,
-        "has_next": page.has_next,
-    }
-    sid = store.create(message.from_user.id, data)
-    item = page.items[0]
-    keyboard = search_kb(sid, 1, False, page.has_next)
-    if item.thumbnail:
-        sent = await message.answer_photo(
-            item.thumbnail,
-            caption=result_card(query, item, 1, page.page),
-            parse_mode="HTML",
-            reply_markup=keyboard,
-        )
-    else:
-        sent = await message.answer(result_card(query, item, 1, page.page), reply_markup=keyboard)
-    data["chat_id"], data["message_id"], data["media"] = (
-        sent.chat.id,
-        sent.message_id,
-        bool(item.thumbnail),
-    )
-    store.update(sid, data)
-
-
-@router.message(Command("search"))
-async def search(message: Message, ctele, state):
-    await run_search(message, message.text.partition(" ")[2], ctele, state)
+        return await message.answer(ui.search_prompt())
+    await run_search(message, query, ctele, db, user)
 
 
 @router.message(InputFlow.search)
-async def search_input(message: Message, state, ctele):
+async def search_input(message: Message, ctele, db, user, state):
     await state.clear()
-    await run_search(message, message.text or "", ctele, state)
+    await run_search(message, (message.text or '').strip(), ctele, db, user)
 
 
-@router.message(Command("latest"))
-async def latest(message: Message, ctele):
-    await show_listing(message, await ctele.latest(1), "Latest")
+@router.message(Command('latest'))
+async def latest_command(message: Message, ctele, db, user):
+    await open_source(message, 'latest', ctele, db, user)
 
 
-@router.callback_query(F.data == "menu:latest")
-async def latest_menu(call: CallbackQuery, ctele):
+@router.message(Command('popular'))
+async def popular_command(message: Message, ctele, db, user):
+    await open_source(message, 'popular', ctele, db, user)
+
+
+@router.message(Command('random'))
+async def random_command(message: Message, ctele, db, user):
+    await open_random(message, ctele, db, user)
+
+
+@router.message(Command('categories'))
+async def categories_command(message: Message, ctele, db, user):
+    sid = await viewer.start_categories(message, ctele, db, user)
+    if not sid:
+        await message.answer(ui.notice('Categories', 'No categories are available right now.'))
+
+
+@router.callback_query(F.data == 'menu:search')
+async def menu_search(call: CallbackQuery, state):
     await call.answer()
-    await show_listing(call.message, await ctele.latest(1), "Latest")
+    await state.set_state(InputFlow.search)
+    await viewer.swap_screen(call.message, ui.search_prompt(), None)
 
 
-@router.message(Command("categories"))
-async def categories(message: Message, ctele):
-    rows = await ctele.categories()
-    if not rows:
-        return await message.answer("No categories are available right now.")
-    lines = ["❖ <b>Categories</b>", "━━━━━━━━━━━━━━━━━━━━", ""]
-    lines.extend(f"• {item.name}" for item in rows[:50])
-    await message.answer("\n".join(lines))
-
-
-@router.callback_query(F.data.startswith("s:"))
-async def search_callback(call: CallbackQuery, ctele, state):
-    _, sid, action, *args = call.data.split(":")
-    data = store.get(sid, call.from_user.id)
-    if not data:
-        return await call.answer("This session expired. Start a new search.", show_alert=True)
+@router.callback_query(F.data == 'menu:latest')
+async def menu_latest(call: CallbackQuery, ctele, db, user):
     await call.answer()
-
-    if action == "open":
-        post = await ctele.post(data["items"][data["index"] - 1].url)
-        if not post.images:
-            if call.message.photo:
-                return await call.message.edit_caption(caption="This post has no viewable images.")
-            return await call.message.edit_text("This post has no viewable images.")
-        data["post"], data["image"], data["media"] = post, 1, True
-        store.update(sid, data)
-        media = InputMediaPhoto(
-            media=post.images[0],
-            caption=gallery_caption(post, 1),
-            parse_mode="HTML",
-        )
-        try:
-            await call.message.edit_media(media, reply_markup=gallery_kb(sid, 1, len(post.images)))
-        except Exception:
-            sent = await call.message.answer_photo(
-                post.images[0],
-                caption=gallery_caption(post, 1),
-                parse_mode="HTML",
-                reply_markup=gallery_kb(sid, 1, len(post.images)),
-            )
-            data["chat_id"], data["message_id"] = sent.chat.id, sent.message_id
-        return
-
-    if action == "back":
-        return await render_result(call.message, data["query"], data, sid, data["index"])
-
-    if action == "jump":
-        await state.set_state(InputFlow.jump_result)
-        await state.update_data(sid=sid)
-        prompt = (
-            f'❖ <b>Jump to a result</b>\n\nCurrent result: {data["index"]}\n'
-            "Send a result number, or /cancel."
-        )
-        try:
-            await call.message.edit_caption(
-                caption=prompt,
-                reply_markup=search_kb(sid, data["index"], data["index"] > 1, data.get("has_next", True)),
-            )
-        except Exception:
-            await call.message.edit_text(
-                prompt,
-                reply_markup=search_kb(sid, data["index"], data["index"] > 1, data.get("has_next", True)),
-            )
-        return
-
-    index = data["index"] + (-1 if action == "prev" else 1 if action == "next" else 0)
-    if action == "at":
-        try:
-            index = int(args[0])
-        except (IndexError, ValueError):
-            return
-    if 1 <= index <= len(data["items"]):
-        async with store.lock(sid):
-            await render_result(call.message, data["query"], data, sid, index)
+    await open_source(call.message, 'latest', ctele, db, user)
 
 
-@router.message(InputFlow.jump_result)
-async def jump_result(message: Message, state):
-    state_data = await state.get_data()
-    sid = state_data.get("sid")
-    data = store.get(sid, message.from_user.id) if sid else None
-    try:
-        index = int(message.text or "")
-        assert data and 1 <= index <= len(data["items"])
-    except (ValueError, AssertionError):
-        return await message.answer("Enter a valid result number, or /cancel.")
-    await state.clear()
-    await render_result_from_state(message, data, sid, index)
+@router.callback_query(F.data == 'menu:popular')
+async def menu_popular(call: CallbackQuery, ctele, db, user):
+    await call.answer()
+    await open_source(call.message, 'popular', ctele, db, user)
+
+
+@router.callback_query(F.data == 'menu:random')
+async def menu_random(call: CallbackQuery, ctele, db, user):
+    await call.answer()
+    await open_random(call.message, ctele, db, user)
+
+
+@router.callback_query(F.data == 'menu:categories')
+async def menu_categories(call: CallbackQuery, ctele, db, user):
+    await call.answer()
+    sid = await viewer.start_categories(call.message, ctele, db, user)
+    if not sid:
+        await call.message.answer(ui.notice('Categories', 'No categories are available right now.'))
