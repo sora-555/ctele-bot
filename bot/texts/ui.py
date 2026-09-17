@@ -155,6 +155,72 @@ def history_empty() -> str:
     )
 
 
+def friend_invite(link: str, expires_at) -> str:
+    expiry = expires_at.strftime('%Y-%m-%d %H:%M UTC') if expires_at else 'in 2 days'
+    return screen("Add friends", "\n".join([bullet("Share this link with someone you know."), kv("Expires", expiry), "", f"<code>{safe(link)}</code>"]))
+
+
+def friends_menu(count: int) -> str:
+    return screen("Friends", "\n".join([kv("Friends", count), "", bullet("Tap a friend to toggle send permission, or remove them.")]))
+
+
+def friend_request(sender: str) -> str:
+    return screen("Friend request", "\n".join([bullet("Request from"), sender, "", bullet("Approve to add this person as a friend.")]))
+
+
+def friend_result(result: str) -> str:
+    return screen("Friend request", bullet(f"Request {result}."))
+
+
+def friend_send_menu(rows, selected, post_title, message_preview='') -> str:
+    names = []
+    for friendship, user in rows:
+        if user.id in selected:
+            names.append(user.username and f"@{safe(user.username)}" or safe(user.display_name))
+    body = [kv("Post", safe(post_title)), kv("Selected", ', '.join(names) if names else 'none')]
+    if message_preview:
+        body.extend(['', kv("Message", safe(message_preview[:1000]))])
+    body.extend(['', bullet("Tap a friend to add or remove them from the send list."), bullet("Recipients must allow messages from you.")])
+    return screen("Send to friends", "\n".join(body))
+
+
+def friend_delivery(post_title, sender, message_text='') -> str:
+    body = [kv("Post", safe(post_title)), kv("From", sender)]
+    if message_text:
+        body.extend(['', safe(message_text)])
+    return screen("A friend shared a post", "\n".join(body))
+
+
+def suggestion_usage() -> str:
+    return screen(
+        "Suggestions",
+        "\n".join([
+            bullet("Send text with /suggestions your message."),
+            bullet("Or reply to a message with /suggestions."),
+        ]),
+    )
+
+
+def suggestion_cooldown(minutes: int) -> str:
+    return notice('Suggestions', f'Please wait about {minutes} minute(s) before sending another suggestion.')
+
+
+def suggestion_admin_header(sender: str) -> str:
+    return screen('New suggestion', kv('From', sender))
+
+
+def suggestion_content(text: str) -> str:
+    return screen('Suggestion', safe(text[:4000]))
+
+
+def suggestion_sent() -> str:
+    return notice('Suggestion sent', 'Your suggestion was sent to the bot admins.')
+
+
+def suggestion_failed() -> str:
+    return notice('Suggestion unavailable', 'The suggestion could not be delivered right now. Try again later.')
+
+
 def search_history(rows) -> str:
     if not rows:
         return history_empty()

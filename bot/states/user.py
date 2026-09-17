@@ -6,6 +6,7 @@ class InputFlow(StatesGroup):
     jump_result = State()
     jump_image = State()
     jump_page = State()
+    friend_message = State()
 
 
 class AdminFlow(StatesGroup):

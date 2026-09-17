@@ -1,6 +1,6 @@
 from aiogram import Dispatcher
 
-from bot.handlers import account, admin, broadcast, browse, errors, fallback, start, viewer
+from bot.handlers import account, admin, broadcast, browse, errors, fallback, friends, suggestions, start, viewer
 from bot.middlewares.access import AccessMiddleware
 from bot.middlewares.ctele import CTeleMiddleware
 from bot.middlewares.db import DatabaseMiddleware
@@ -20,6 +20,8 @@ def build_dispatcher():
     dp.include_router(browse.router)
     dp.include_router(viewer.router)
     dp.include_router(account.router)
+    dp.include_router(friends.router)
+    dp.include_router(suggestions.router)
     dp.include_router(admin.router)
     dp.include_router(broadcast.router)
     dp.include_router(fallback.router)

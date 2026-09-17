@@ -739,6 +739,11 @@ async def handle_gallery(call: CallbackQuery, rest, db, user, ctele, state):
         link = f"https://t.me/{username}?start=post-{slug}"
         body = "\n".join([ui.kv('Link', f'<code>{ui.safe(link)}</code>'), '', ui.bullet('Anyone who opens it lands in this gallery.')])
         return await call.message.answer(ui.screen('Share this gallery', body))
+    elif action == 'sendfriends':
+        from bot.handlers.friends import open_send_menu
+
+        await call.answer()
+        return await open_send_menu(call.message, db, user, post)
 
     await call.answer()
     async with store.lock(sid):

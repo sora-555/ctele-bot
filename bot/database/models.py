@@ -27,6 +27,7 @@ class User(Base):
     blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    suggestion_last_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     @property
     def display_name(self) -> str:
@@ -141,3 +142,31 @@ class BotSession(Base):
     user_id: Mapped[int] = mapped_column(BigInteger, index=True)
     payload: Mapped[bytes] = mapped_column(LargeBinary)
     expires: Mapped[float] = mapped_column(Float, index=True)
+
+
+class FriendInvite(Base):
+    __tablename__ = 'friend_invites'
+    owner_id: Mapped[int] = mapped_column(ForeignKey('users.id'), primary_key=True)
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class FriendRequest(Base):
+    __tablename__ = 'friend_requests'
+    __table_args__ = (UniqueConstraint('sender_id', 'receiver_id'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sender_id: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
+    receiver_id: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
+    status: Mapped[str] = mapped_column(String(12), default='pending', index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Friendship(Base):
+    __tablename__ = 'friendships'
+    __table_args__ = (UniqueConstraint('user_id', 'friend_id'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
+    friend_id: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
+    send_allowed: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

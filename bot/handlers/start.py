@@ -25,6 +25,11 @@ async def send_main_menu(message, db, user):
 @router.message(Command('start'))
 async def start(message: Message, command: CommandObject, db, user, ctele):
     payload = (command.args or '').strip()
+    if payload.startswith('friend_req_'):
+        from bot.handlers.friends import show_request
+
+        await show_request(message, db, user.id, payload[11:])
+        return
     if payload.startswith('post-'):
         slug = payload[5:].strip()
         url = slug if slug.startswith('http') else f"{settings.source_base_url.rstrip('/')}/{slug.lstrip('/')}"

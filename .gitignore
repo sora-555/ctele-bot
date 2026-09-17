@@ -1,8 +1,11 @@
 .env
 Database.db
+Database.db-shm
+Database.db-wal
 logs/
 __pycache__/
 *.py[cod]
 .venv/
 bot.zip
 plan.md
+.venv/

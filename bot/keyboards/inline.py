@@ -31,9 +31,30 @@ def main_kb(has_continue: bool = False):
         [_btn("Latest", "menu:latest"), _btn("Popular", "menu:popular")],
         [_btn("Categories", "menu:categories"), _btn("Saved", "menu:saved")],
         [_btn("History", "menu:history"), _btn("Settings", "menu:settings")],
-        [_btn("Help", "menu:help")],
+        [_btn("Friends", "menu:friends"), _btn("Help", "menu:help")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def friend_request_kb(request_id):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [_btn("Approve", f"friend:accept:{request_id}"), _btn("Decline", f"friend:decline:{request_id}")],
+        ]
+    )
+
+
+def friend_management_kb(rows):
+    buttons = []
+    for friendship, user in rows:
+        label = f"{user.username and '@' + user.username or user.display_name[:24]}"
+        permission = "Send on" if friendship.send_allowed else "Send off"
+        buttons.append([
+            _btn(f"{label} {S.DOT} {permission}", f"friends:send:{user.id}"),
+            _btn("Remove", f"friends:remove:{user.id}"),
+        ])
+    buttons.append([_btn(f"{S.PREV} Main menu", "menu:main")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def saved_empty_kb(sid, tab, posts, images):
@@ -123,8 +144,35 @@ def gallery_kb(sid, index, total, saved_image=False, saved_post=False):
             _btn("Share", f"g:{sid}:share"),
         ]
     )
+    rows.append([_btn("Send to friends", f"g:{sid}:sendfriends")])
     rows.append([_btn(f"{S.PREV} Back to list", f"g:{sid}:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def friend_send_kb(sid, rows, selected, message_preview=''):
+    buttons = []
+    for friendship, user in rows:
+        mark = "[x]" if user.id in selected else "[ ]"
+        label = user.username and f"@{user.username}" or user.display_name
+        buttons.append([_btn(f"{mark} {label[:28]}", f"fs:{sid}:toggle:{user.id}")])
+    if message_preview:
+        buttons.append([_btn("Edit message", f"fs:{sid}:message")])
+    else:
+        buttons.append([_btn("Add message", f"fs:{sid}:message")])
+    buttons.append([_btn("Send", f"fs:{sid}:send"), _btn("Cancel", f"fs:{sid}:cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def delivered_friend_message_kb(post_url, sender_id):
+    username = settings.bot_username.lstrip('@')
+    slug = post_url.rstrip('/').split('/')[-1]
+    link = f"https://t.me/{username}?start=post-{slug}" if username else post_url
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="View post", url=link)],
+            [_btn("Delete", "fmsg:delete"), _btn("Revoke send permission", f"fmsg:revoke:{sender_id}")],
+        ]
+    )
 
 
 def album_kb(sid, batch, batches):

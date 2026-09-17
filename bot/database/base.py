@@ -1,4 +1,5 @@
 import asyncio
+import subprocess
 
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -37,6 +38,20 @@ async def init_db():
     await run_migrations()
     async with SessionLocal() as session:
         await backfill_users(session)
+
+
+async def run_alembic_upgrade():
+    """Apply committed Alembic revisions before the bot starts polling."""
+    process = await asyncio.create_subprocess_exec(
+        'alembic',
+        'upgrade',
+        'head',
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    output, _ = await process.communicate()
+    if process.returncode:
+        raise RuntimeError(f'Alembic migration failed:\n{output.decode(errors="replace")}')
 
 
 async def retry_locked(operation, attempts: int = 4, delay: float = 0.5):

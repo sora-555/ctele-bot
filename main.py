@@ -4,7 +4,7 @@ import logging
 from bot.api.app import create_app
 from bot.commands import register_commands
 from bot.config import settings
-from bot.database.base import SessionLocal, init_db
+from bot.database.base import SessionLocal, init_db, run_alembic_upgrade
 from bot.database.repository import admins as admins_repo
 from bot.loader import bot
 from bot.middlewares.ctele import service as ctele_service
@@ -37,6 +37,7 @@ async def run():
     if not settings.bot_token:
         raise RuntimeError('BOT_TOKEN is missing. Copy .env.example to .env and configure it.')
     await init_db()
+    await run_alembic_upgrade()
     async with SessionLocal() as session:
         created = await admins_repo.bootstrap(session, settings.admin_id_list)
         await session.commit()

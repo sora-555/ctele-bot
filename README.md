@@ -25,7 +25,7 @@ this project and is never generated here.
        python main.py
 
 `main.py` is the only entry point. It creates or upgrades the database, runs the
-schema top-ups, backfills orphan rows, bootstraps admins from `ADMIN_IDS`,
+legacy schema top-ups, applies `alembic upgrade head`, backfills orphan rows, bootstraps admins from `ADMIN_IDS`,
 starts the auto-delete sweep and resumes any interrupted broadcast before
 polling starts.
 
@@ -44,6 +44,9 @@ behind Telegram's webhook instead; the FastAPI app serves `/`, `/healthz`,
 | `/categories` | Category list, then a paginated listing |
 | `/favorites` | Saved posts and saved images, in two tabs |
 | `/history` | Galleries you opened |
+| `/add_friends` | Create a two-day friend invite link |
+| `/friends` | Manage friends and permission to send messages |
+| `/suggestions <message>` | Send a suggestion to bot admins; it can also reply to a message |
 | `/profile` | Your counters |
 | `/settings` | Per-user preferences |
 | `/help`, `/about`, `/cancel` | Command list, bot info, leave an input prompt |
@@ -82,6 +85,10 @@ item never show a dead button.
 In the gallery, `Save image` stores exactly the image on screen (the star flips
 to show it), `Save post` stores the whole set, `Download` uploads the bytes, and
 `Share` returns a `t.me/<bot>?start=post-<slug>` link that reopens the gallery.
+`Send to friends` lets you select friends, add an optional message up to 1000
+characters, and deliver the post only to friends who have send permission
+enabled. Recipients can delete the delivered bot message or revoke that
+friend's future send permission.
 
 ## Storage
 
@@ -93,9 +100,10 @@ to show it), `Save post` stores the whole set, `Download` uploads the bytes, and
   connection while the update's transaction holds the write lock - that
   deadlocks until the busy timeout expires. Background writers retry through
   `bot/database/base.py::retry_locked`.
-- `bot/database/migrate.py` applies idempotent `ALTER TABLE` top-ups on boot
-  because `create_all()` only ever creates missing tables. Replace it with a
-  real migration tool if the schema keeps moving.
+- `alembic/versions/` contains forward migrations for VPS deployments. Run
+  `alembic upgrade head` manually before `python main.py` when deploying, and
+  startup runs the same command as a final guard. Existing legacy databases are
+  stamped by the baseline and upgraded without dropping data.
 
 ## Layout
 
