@@ -78,6 +78,7 @@ async def gallery(call: CallbackQuery, ctele, db, state):
 
     number = max(1, min(total, number))
     data["image"] = number
+    store.update(sid, data)
     await call.answer()
     async with store.lock(sid):
         await call.message.edit_media(
@@ -102,6 +103,7 @@ async def jump_image(message: Message, state):
         return await message.answer("Enter a valid image number, or /cancel.")
 
     data["image"] = number
+    store.update(sid, data)
     await state.clear()
     post = data["post"]
     try:

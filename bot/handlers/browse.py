@@ -13,6 +13,7 @@ router = Router()
 async def render_result(message, query, data, sid, index=1):
     item = data["items"][index - 1]
     data["index"] = index
+    store.update(sid, data)
     text = result_card(query, item, index, data.get("page", 1))
     keyboard = search_kb(sid, index, index > 1, data.get("has_next", True))
     if item.thumbnail:
@@ -32,6 +33,7 @@ async def render_result(message, query, data, sid, index=1):
 
 async def render_result_from_state(message, data, sid, index):
     data["index"] = index
+    store.update(sid, data)
     item = data["items"][index - 1]
     try:
         if data.get("media") and item.thumbnail:
@@ -86,6 +88,7 @@ async def show_listing(message: Message, page, label: str):
         sent.message_id,
         bool(item.thumbnail),
     )
+    store.update(sid, data)
 
 
 async def run_search(message: Message, query: str, ctele, state):
@@ -120,6 +123,7 @@ async def run_search(message: Message, query: str, ctele, state):
         sent.message_id,
         bool(item.thumbnail),
     )
+    store.update(sid, data)
 
 
 @router.message(Command("search"))
@@ -167,6 +171,7 @@ async def search_callback(call: CallbackQuery, ctele, state):
         if not post.images:
             return await call.message.edit_text("This post has no viewable images.")
         data["post"], data["image"], data["media"] = post, 1, True
+        store.update(sid, data)
         media = InputMediaPhoto(
             media=post.images[0],
             caption=gallery_caption(post, 1),
