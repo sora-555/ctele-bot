@@ -169,6 +169,8 @@ async def search_callback(call: CallbackQuery, ctele, state):
     if action == "open":
         post = await ctele.post(data["items"][data["index"] - 1].url)
         if not post.images:
+            if call.message.photo:
+                return await call.message.edit_caption(caption="This post has no viewable images.")
             return await call.message.edit_text("This post has no viewable images.")
         data["post"], data["image"], data["media"] = post, 1, True
         store.update(sid, data)
