@@ -28,7 +28,7 @@ async def start(message: Message, command: CommandObject, db, user, ctele):
     if payload.startswith('post-'):
         slug = payload[5:].strip()
         url = slug if slug.startswith('http') else f"{settings.source_base_url.rstrip('/')}/{slug.lstrip('/')}"
-        sid = await viewer.start_gallery(message, url, ctele, db, title='Shared gallery')
+        sid = await viewer.start_gallery(message, url, ctele, db, title='Shared gallery', user_id=message.from_user.id)
         if sid:
             return
         await message.answer(ui.notice('Not available', 'That gallery could not be opened. Try a search instead.'))
@@ -87,6 +87,6 @@ async def menu_continue(call: CallbackQuery, db, user, ctele):
     if not rows:
         return await call.answer('Nothing to continue yet.', show_alert=True)
     await call.answer()
-    sid = await viewer.start_gallery(call.message, rows[0].post_url, ctele, db, title='Continue')
+    sid = await viewer.start_gallery(call.message, rows[0].post_url, ctele, db, title='Continue', user_id=user.id)
     if not sid:
         await call.message.answer(ui.notice('Not available', 'That gallery could not be opened.'))

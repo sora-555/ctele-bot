@@ -46,7 +46,8 @@ class UserMiddleware:
             user = await upsert(session, tg_user)
         except Exception:
             log.exception("could not provision user %s", tg_user.id)
-            return await handler(event, data)
+            await session.rollback()
+            return None
         data["user"] = user
         data["db_user"] = user
         if not user.is_active:

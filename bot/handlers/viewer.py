@@ -13,7 +13,7 @@ from aiogram.types import BufferedInputFile, CallbackQuery, InputMediaPhoto, Mes
 from bot.config import settings
 from bot.database.repository import content as content_repo
 from bot.database.models import UserSetting
-from bot.keyboards.inline import card_kb, categories_kb, gallery_kb, main_kb, saved_empty_kb
+from bot.keyboards.inline import album_kb, card_kb, categories_kb, gallery_kb, main_kb, saved_empty_kb
 from bot.services.pagination import page_slice
 from bot.services.sessions import store
 from bot.states.user import InputFlow
@@ -52,9 +52,6 @@ def photos_enabled() -> bool:
 async def _user_ttl(db, user_id) -> int | None:
     if not settings.auto_delete_enabled:
         return None
-    row = await db.get(UserSetting, user_id)
-    if row is not None and row.auto_delete_minutes is not None:
-        return row.auto_delete_minutes or None
     return settings.auto_delete_ttl_minutes
 
 
@@ -344,9 +341,9 @@ async def _prepare(db, user_id, data, index, ctele):
 # rendering
 # --------------------------------------------------------------------------- #
 
-async def start_card(message, ns, data, index=1, ctele=None, db=None):
+async def start_card(message, ns, data, index=1, ctele=None, db=None, user_id=None):
     """Send the first message of a flow and open a session for it."""
-    user_id = message.from_user.id
+    user_id = user_id or message.from_user.id
     sid = await store.create(db, user_id, data)
     data['sid'] = sid
     data['ns'] = ns
@@ -395,6 +392,9 @@ async def show_card(bot, ns, sid, data, index, db, user_id, ctele=None):
 
 
 async def show_gallery(bot, sid, data, index, db, user_id):
+    setting = await db.get(UserSetting, user_id)
+    if setting is not None and setting.delivery_mode == 'album':
+        return await show_album_gallery(bot, sid, data, (index - 1) // max(1, setting.images_per_page) + 1, db, user_id)
     post = data['post']
     total = len(post.images)
     index = max(1, min(index, total))
@@ -412,6 +412,35 @@ async def show_gallery(bot, sid, data, index, db, user_id):
         saved_post=saved_post,
     )
     await _apply(bot, data, text, keyboard, post.images[index - 1])
+    await store.update(db, sid, data)
+
+
+async def show_album_gallery(bot, sid, data, batch, db, user_id):
+    """Render one user-sized batch as a Telegram media group."""
+    post = data['post']
+    setting = await db.get(UserSetting, user_id)
+    per_page = setting.images_per_page if setting else settings.images_per_page
+    per_page = max(1, min(10, per_page))
+    batches = max(1, (len(post.images) + per_page - 1) // per_page)
+    batch = max(1, min(batch, batches))
+    start = (batch - 1) * per_page
+    images = post.images[start:start + per_page]
+    old_album = data.get('album_message_ids') or []
+    await _delete(bot, data.get('chat_id'), data.get('message_id'))
+    for message_id in old_album:
+        await _delete(bot, data.get('chat_id'), message_id)
+    if len(images) == 1:
+        sent = [await bot.send_photo(data['chat_id'], images[0])]
+    else:
+        media = [InputMediaPhoto(media=image) for image in images]
+        sent = await bot.send_media_group(data['chat_id'], media)
+    data['album_batch'] = batch
+    data['album_message_ids'] = [item.message_id for item in sent]
+    data['media'] = False
+    data['message_id'] = None
+    caption = ui.gallery_caption(post, start + 1, saved=False, ttl_minutes=data.get('ttl'))
+    control = await bot.send_message(data['chat_id'], caption, reply_markup=album_kb(sid, batch, batches))
+    data['message_id'] = control.message_id
     await store.update(db, sid, data)
 
 
@@ -490,9 +519,9 @@ async def swap_screen(call_message, text, keyboard):
         log.exception('could not send the screen')
 
 
-async def start_gallery(message, url, ctele, db, title='Shared gallery'):
+async def start_gallery(message, url, ctele, db, title='Shared gallery', user_id=None):
     """Open a gallery as a brand new message (deep links, random picks)."""
-    user_id = message.from_user.id
+    user_id = user_id or message.from_user.id
     try:
         post = await ctele.post(url)
     except Exception:
@@ -507,6 +536,10 @@ async def start_gallery(message, url, ctele, db, title='Shared gallery'):
     await content_repo.record_view(db, user_id, post.url, post.title)
     saved_indexes = await content_repo.saved_image_indexes(db, user_id, post.url)
     saved_post = await content_repo.is_favorite(db, user_id, post.url)
+    setting = await db.get(UserSetting, user_id)
+    if setting is not None and setting.delivery_mode == 'album':
+        await show_album_gallery(message.bot, sid, data, 1, db, user_id)
+        return sid
     text = ui.gallery_caption(post, 1, saved=1 in saved_indexes, ttl_minutes=None)
     keyboard = gallery_kb(sid, 1, len(post.images), saved_image=1 in saved_indexes, saved_post=saved_post)
     try:
@@ -623,6 +656,21 @@ async def handle_gallery(call: CallbackQuery, rest, db, user, ctele, state):
     post = data['post']
     total = len(post.images)
     index = _position(data, 'image')
+
+    if action in ('albumprev', 'albumnext', 'albumat'):
+        batch = int(data.get('album_batch', 1))
+        if action == 'albumprev':
+            batch -= 1
+        elif action == 'albumnext':
+            batch += 1
+        elif args:
+            try:
+                batch = int(args[0])
+            except ValueError:
+                return await call.answer()
+        await call.answer()
+        async with store.lock(sid):
+            return await show_album_gallery(call.bot, sid, data, batch, db, user_id)
 
     if action == 'back':
         await call.answer()

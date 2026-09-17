@@ -127,6 +127,20 @@ def gallery_kb(sid, index, total, saved_image=False, saved_post=False):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def album_kb(sid, batch, batches):
+    rows = []
+    if batches > 1:
+        nav = []
+        if batch > 1:
+            nav.append(_btn(f"{S.PREV} Previous album", f"g:{sid}:albumprev"))
+        nav.append(_btn(f"{batch} / {batches}", f"g:{sid}:albumat:{batch}"))
+        if batch < batches:
+            nav.append(_btn(f"Next album {S.NEXT}", f"g:{sid}:albumnext"))
+        rows.append(nav)
+    rows.append([_btn(f"{S.PREV} Back to list", f"g:{sid}:back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def categories_kb(sid, entries, page, pages):
     """entries: iterable of (global_index, name)."""
     rows = []
@@ -144,18 +158,12 @@ def categories_kb(sid, entries, page, pages):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def settings_kb(setting, ttl_minutes, auto_delete):
+def settings_kb(setting):
     rows = [
         [_btn(f"Delivery {S.DOT} {'album' if setting.delivery_mode == 'album' else 'single'}", "set:delivery")],
         [_btn(f"Images per page {S.DOT} {setting.images_per_page}", "set:perpage")],
         [_btn(f"Thumbnails {S.DOT} {'on' if setting.show_thumbnails else 'off'}", "set:thumbs")],
         [_btn(f"Numbered rows {S.DOT} {'on' if setting.numbered_nav else 'off'}", "set:numbers")],
-        [
-            _btn(
-                f"Auto-delete {S.DOT} " + (f"{ttl_minutes} min" if auto_delete else "off"),
-                "set:ttl",
-            )
-        ],
         [_btn(f"{S.PREV} Main menu", "menu:main")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)

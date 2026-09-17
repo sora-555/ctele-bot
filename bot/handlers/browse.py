@@ -37,7 +37,7 @@ async def run_search(message: Message, query: str, ctele, db, user):
     await viewer.start_card(message, 's', data, 1, ctele=ctele, db=db)
 
 
-async def run_listing(message: Message, title: str, page, source: str, ctele, db, query=None):
+async def run_listing(message: Message, title: str, page, source: str, ctele, db, user_id: int, query=None):
     data = viewer.entry_data(
         'listing',
         title,
@@ -47,7 +47,7 @@ async def run_listing(message: Message, title: str, page, source: str, ctele, db
         source=source,
         query=query,
     )
-    await viewer.start_card(message, 's', data, 1, ctele=ctele, db=db)
+    await viewer.start_card(message, 's', data, 1, ctele=ctele, db=db, user_id=user_id)
 
 
 async def open_source(message: Message, kind: str, ctele, db, user):
@@ -62,7 +62,7 @@ async def open_source(message: Message, kind: str, ctele, db, user):
     if not page.items:
         return await message.answer(ui.notice('Nothing to show', 'The source returned no posts right now.'))
     title = 'Latest' if kind == 'latest' else 'Popular'
-    await run_listing(message, title, page, kind, ctele, db)
+    await run_listing(message, title, page, kind, ctele, db, user.id)
 
 
 async def open_random(message: Message, ctele, db, user):
@@ -73,7 +73,7 @@ async def open_random(message: Message, ctele, db, user):
         return await message.answer(SOURCE_ERROR)
     if item is None:
         return await message.answer(ui.notice('Nothing to show', 'The source returned no posts right now.'))
-    sid = await viewer.start_gallery(message, item.url, ctele, db, title='Random pick')
+    sid = await viewer.start_gallery(message, item.url, ctele, db, title='Random pick', user_id=user.id)
     if not sid:
         await message.answer(ui.notice('Not available', 'That post has no viewable images.'))
 

@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 
-from bot.database.models import Favorite, History, SavedImage, TrackedMessage
+from bot.database.models import Favorite, History, SavedImage, TrackedMessage, User
 
 
 def _now():
@@ -107,6 +107,9 @@ async def count_favorites(session, user_id: int) -> int:
 async def record_view(session, user_id: int, post_url: str, post_title: str):
     row = await session.scalar(select(History).where(History.user_id == user_id, History.post_url == post_url))
     if row is None:
+        if await session.get(User, user_id) is None:
+            session.add(User(id=user_id, created_at=_now(), request_count=0, is_active=True))
+            await session.flush()
         session.add(History(user_id=user_id, post_url=post_url, post_title=(post_title or '')[:500]))
     else:
         row.viewed_at = _now()

@@ -52,6 +52,16 @@ async def top_queries(session, limit: int = 10):
     return [(query, total) for query, total in rows.all()]
 
 
+async def user_search_history(session, user_id: int, limit: int = 20):
+    rows = await session.scalars(
+        select(SearchLog)
+        .where(SearchLog.user_id == user_id)
+        .order_by(SearchLog.created_at.desc())
+        .limit(limit)
+    )
+    return list(rows.all())
+
+
 async def log_search(session, user_id: int, query: str):
     value = (query or '').strip()[:255]
     if value:

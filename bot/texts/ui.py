@@ -151,8 +151,19 @@ def saved_empty(tab: str) -> str:
 def history_empty() -> str:
     return screen(
         "History",
-        "\n".join([f"{S.SECTION} <b>Nothing here yet</b>", "", bullet("Galleries you open show up here.")]),
+        "\n".join([f"{S.SECTION} <b>Nothing here yet</b>", "", bullet("Searches you make show up here.")]),
     )
+
+
+def search_history(rows) -> str:
+    if not rows:
+        return history_empty()
+    body = [f"{S.SECTION} <b>Recent searches</b>", ""]
+    body.extend(
+        bullet(f"{safe(row.query)} {S.DOT} {row.created_at.strftime('%Y-%m-%d %H:%M') if row.created_at else ''}")
+        for row in rows
+    )
+    return screen("History", "\n".join(body))
 
 
 def categories_text(count: int) -> str:
@@ -179,13 +190,12 @@ def profile_text(user, saved_posts: int, saved_images: int, viewed: int) -> str:
     return screen("Your profile", "\n".join(body))
 
 
-def settings_text(setting, ttl_minutes: int, auto_delete: bool) -> str:
+def settings_text(setting) -> str:
     body = [
         kv("Delivery", "album" if setting.delivery_mode == "album" else "single image"),
         kv("Images per page", setting.images_per_page),
         kv("Thumbnails", "on" if setting.show_thumbnails else "off"),
         kv("Numbered rows", "on" if setting.numbered_nav else "off"),
-        kv("Auto-delete", f"{ttl_minutes} min" if auto_delete else "off"),
         "",
         bullet("Tap a row to change it. Changes apply instantly."),
     ]

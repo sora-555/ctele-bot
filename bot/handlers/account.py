@@ -7,6 +7,7 @@ from aiogram.types import CallbackQuery, Message
 from bot.config import settings
 from bot.database.models import UserSetting
 from bot.database.repository import content as content_repo
+from bot.database.repository import stats as stats_repo
 from bot.database.repository import users as users_repo
 from bot.handlers import viewer
 from bot.keyboards.inline import main_kb, settings_kb
@@ -28,16 +29,8 @@ async def setting_for(db, user_id: int) -> UserSetting:
     return setting
 
 
-def ttl_label(value) -> str:
-    if value is None:
-        return f"{settings.auto_delete_ttl_minutes} min (default)"
-    return 'off' if value == 0 else f"{value} min"
-
-
 def settings_payload(setting: UserSetting):
-    auto_delete = bool(settings.auto_delete_enabled) and setting.auto_delete_minutes != 0
-    label = ttl_label(setting.auto_delete_minutes)
-    return ui.settings_text(setting, label, auto_delete), settings_kb(setting, label, auto_delete)
+    return ui.settings_text(setting), settings_kb(setting)
 
 
 async def open_saved(message, db, user, tab: str = 'posts'):
@@ -52,12 +45,12 @@ async def open_saved(message, db, user, tab: str = 'posts'):
     data = viewer.entry_data(mode, title, tab=tab)
     data['count_posts'] = posts
     data['count_images'] = images
-    return await viewer.start_card(message, 'f', data, 1, db=db)
+    return await viewer.start_card(message, 'f', data, 1, db=db, user_id=user.id)
 
 
 async def open_history(message, db, user):
-    data = viewer.entry_data('history', 'History')
-    return await viewer.start_card(message, 'f', data, 1, db=db)
+    rows = await stats_repo.user_search_history(db, user.id)
+    return await message.answer(ui.search_history(rows), reply_markup=main_kb())
 
 
 @router.message(Command('profile'))
@@ -119,9 +112,6 @@ async def settings_toggle(call: CallbackQuery, db, user):
         setting.show_thumbnails = not setting.show_thumbnails
     elif key == 'numbers':
         setting.numbered_nav = not setting.numbered_nav
-    elif key == 'ttl':
-        current = setting.auto_delete_minutes if setting.auto_delete_minutes in TTL_CHOICES else None
-        setting.auto_delete_minutes = TTL_CHOICES[(TTL_CHOICES.index(current) + 1) % len(TTL_CHOICES)]
     else:
         return await call.answer('Unknown setting.', show_alert=True)
     await db.flush()
