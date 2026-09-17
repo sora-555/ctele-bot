@@ -1,5 +1,5 @@
 import asyncio
-import subprocess
+import sys
 
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -43,6 +43,8 @@ async def init_db():
 async def run_alembic_upgrade():
     """Apply committed Alembic revisions before the bot starts polling."""
     process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        '-m',
         'alembic',
         'upgrade',
         'head',
