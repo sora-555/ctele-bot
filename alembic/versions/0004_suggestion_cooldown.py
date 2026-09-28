@@ -4,7 +4,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = '0004_suggestion_cooldown'
-down_revision = '0003_friend_expiry_and_permissions'
+down_revision = '0003_friend_expiry'
 branch_labels = None
 depends_on = None
 

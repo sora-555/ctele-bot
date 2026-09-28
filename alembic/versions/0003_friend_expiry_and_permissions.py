@@ -3,7 +3,7 @@
 from alembic import op
 import sqlalchemy as sa
 
-revision = '0003_friend_expiry_and_permissions'
+revision = '0003_friend_expiry'
 down_revision = '0002_friend_system'
 branch_labels = None
 depends_on = None
