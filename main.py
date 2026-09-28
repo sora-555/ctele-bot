@@ -1,10 +1,12 @@
 import asyncio
 import logging
 
+from sqlalchemy import text
+
 from bot.api.app import create_app
 from bot.commands import register_commands
 from bot.config import settings
-from bot.database.base import SessionLocal, init_db, run_alembic_upgrade
+from bot.database.base import SessionLocal, init_db
 from bot.database.repository import admins as admins_repo
 from bot.loader import bot
 from bot.middlewares.ctele import service as ctele_service
@@ -33,11 +35,22 @@ async def sweep_sessions():
             log.exception('session sweep failed')
 
 
+async def database_keepalive():
+    while True:
+        try:
+            async with SessionLocal() as session:
+                await session.execute(text('SELECT 1'))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception('database keepalive failed')
+        await asyncio.sleep(24 * 60 * 60)
+
+
 async def run():
     if not settings.bot_token:
         raise RuntimeError('BOT_TOKEN is missing. Copy .env.example to .env and configure it.')
     await init_db()
-    await run_alembic_upgrade()
     async with SessionLocal() as session:
         created = await admins_repo.bootstrap(session, settings.admin_id_list)
         await session.commit()
@@ -56,6 +69,7 @@ async def run():
     app = create_app(bot, dp, settings.webhook_secret)
     import uvicorn
 
+    keepalive = asyncio.create_task(database_keepalive())
     try:
         if settings.run_mode.lower() == 'webhook':
             if not settings.webhook_base_url:
@@ -79,6 +93,8 @@ async def run():
                 api.cancel()
                 sweeper.cancel()
     finally:
+        keepalive.cancel()
+        await asyncio.gather(keepalive, return_exceptions=True)
         await deletion.stop()
         if settings.run_mode.lower() == 'webhook' and settings.webhook_delete_on_shutdown:
             try:

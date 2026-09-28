@@ -32,6 +32,7 @@ ADMIN_COMMANDS = [
     ('user', 'Open a user card'),
     ('stats', 'Bot statistics'),
     ('export', 'Export users as CSV'),
+    ('get_db', 'Download database backup'),
     ('audit', 'Recent admin actions'),
     ('block', 'Block a user'),
     ('unblock', 'Unblock a user'),

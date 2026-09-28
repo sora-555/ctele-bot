@@ -15,29 +15,21 @@ class Base(DeclarativeBase):
 engine = create_async_engine(settings.database_url, echo=False)
 
 
-@event.listens_for(engine.sync_engine, "connect")
-def _sqlite_pragmas(dbapi_connection, connection_record):
-    cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA foreign_keys=ON")
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA busy_timeout=15000")
-    cursor.close()
+if engine.dialect.name == "sqlite":
+    @event.listens_for(engine.sync_engine, "connect")
+    def _sqlite_pragmas(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=15000")
+        cursor.close()
 
 
 SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
 async def init_db():
-    from bot.database import models  # noqa: F401  (register the tables)
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    from bot.database.migrate import backfill_users, run_migrations
-
-    await run_migrations()
-    async with SessionLocal() as session:
-        await backfill_users(session)
+    await run_alembic_upgrade()
 
 
 async def run_alembic_upgrade():

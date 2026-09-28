@@ -1,7 +1,7 @@
 # CosplayTele Telegram Bot
 
-An aiogram 3 browser bot for the CosplayTele galleries, with a SQLite-backed
-user/analytics store and a FastAPI health layer. Search, browse, save and
+An aiogram 3 browser bot for the CosplayTele galleries, with a PostgreSQL-backed
+user/analytics store (including Supabase) and a FastAPI health layer. Search, browse, save and
 broadcast all run from this one process.
 
 The `ctele/` SDK package is supplied separately. It is intentionally not part of
@@ -15,7 +15,8 @@ this project and is never generated here.
 ## Setup
 
 1. Copy `ctele/` from the supplied SDK into the project root.
-2. Copy `.env.example` to `.env` and set `BOT_TOKEN` and `ADMIN_IDS`.
+2. Copy `.env.example` to `.env`, set `BOT_TOKEN` and `ADMIN_IDS`, and replace
+  the database URL placeholders with your Supabase Session Pooler connection details.
 3. Install dependencies:
 
        pip install -r requirements.txt
@@ -24,10 +25,9 @@ this project and is never generated here.
 
        python main.py
 
-`main.py` is the only entry point. It creates or upgrades the database, runs the
-legacy schema top-ups, applies `alembic upgrade head`, backfills orphan rows, bootstraps admins from `ADMIN_IDS`,
-starts the auto-delete sweep and resumes any interrupted broadcast before
-polling starts.
+`main.py` is the only entry point. It applies `alembic upgrade head`, bootstraps
+admins from `ADMIN_IDS`, starts the database keepalive and auto-delete sweep,
+and resumes any interrupted broadcast before polling starts.
 
 Polling is the default. Set `RUN_MODE=webhook` and `WEBHOOK_BASE_URL` to run
 behind Telegram's webhook instead; the FastAPI app serves `/`, `/healthz`,
@@ -92,18 +92,14 @@ friend's future send permission.
 
 ## Storage
 
-- SQLite through SQLAlchemy async, WAL mode, `foreign_keys=ON` and a 15 s
-  `busy_timeout`.
+- PostgreSQL through SQLAlchemy async; Supabase Session Pooler is the recommended
+  connection for hosted bot deployments. SQLite remains available for local use.
+- Startup runs a daily `SELECT 1` keepalive. Supabase Free may still pause a
+  project for inactivity; this query is not a guaranteed way to prevent pausing.
 - **Any update that carries a `from_user` provisions that user**, so the `users`
   table always reflects who has interacted.
-- SQLite allows one writer at a time, so a handler must never open a second
-  connection while the update's transaction holds the write lock - that
-  deadlocks until the busy timeout expires. Background writers retry through
-  `bot/database/base.py::retry_locked`.
-- `alembic/versions/` contains forward migrations for VPS deployments. Run
-  `alembic upgrade head` manually before `python main.py` when deploying, and
-  startup runs the same command as a final guard. Existing legacy databases are
-  stamped by the baseline and upgraded without dropping data.
+- `alembic/versions/` contains forward schema migrations. Startup applies them
+  automatically; the baseline creates all mapped tables on a new database.
 
 ## Layout
 

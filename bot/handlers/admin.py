@@ -1,10 +1,15 @@
+import asyncio
 import csv
 import io
 import logging
+import sqlite3
+import tempfile
+from pathlib import Path
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from sqlalchemy.engine import make_url
 
 from bot.config import settings
 from bot.database.repository import admins as admins_repo
@@ -83,6 +88,27 @@ async def csv_payload(db) -> bytes:
             stats['favorites'], stats['saved_images'], int(bool(row.is_active)), int(bool(row.bot_blocked)),
         ])
     return buffer.getvalue().encode('utf-8')
+
+
+def _sqlite_database_snapshot(database_url: str) -> bytes:
+    url = make_url(database_url)
+    if url.get_backend_name() != 'sqlite' or not url.database or url.database == ':memory:':
+        raise ValueError('A file-based SQLite database is required.')
+
+    database_path = Path(url.database).resolve()
+    if not database_path.is_file():
+        raise FileNotFoundError(database_path)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        snapshot_path = Path(temp_dir) / 'database.db'
+        source = sqlite3.connect(database_path)
+        snapshot = sqlite3.connect(snapshot_path)
+        try:
+            source.backup(snapshot)
+        finally:
+            snapshot.close()
+            source.close()
+        return snapshot_path.read_bytes()
 
 
 @router.message(Command('admin'))
@@ -176,6 +202,20 @@ async def export_command(message: Message, db, user):
     if not await guard(message, db):
         return
     await message.answer_document(BufferedInputFile(await csv_payload(db), filename='users.csv'))
+
+
+@router.message(Command('get_db'))
+async def get_db_command(message: Message, db, user):
+    if not await guard(message, db):
+        return
+    try:
+        payload = await asyncio.to_thread(_sqlite_database_snapshot, settings.database_url)
+    except ValueError as exc:
+        return await message.answer(str(exc))
+    except (OSError, sqlite3.Error):
+        log.exception('Failed to create database snapshot')
+        return await message.answer('Could not create the database snapshot.')
+    await message.answer_document(BufferedInputFile(payload, filename='database_backup.db'))
 
 
 @router.message(Command('audit'))

@@ -14,8 +14,7 @@ def _has_table(name):
 
 
 def upgrade():
-    # A fresh database is completed by init_db(); this revision only needs
-    # to create friend tables when the legacy users table already exists.
+    # The baseline creates current tables; this fills in friend tables on older schemas.
     if not _has_table('users'):
         return
     if not _has_table('friend_invites'):
